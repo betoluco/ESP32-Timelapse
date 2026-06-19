@@ -87,6 +87,15 @@ void configInitCamera(){
 }
 
 void takeSavePhoto(String path){
+  for (int i = 0; i < 10; i++){
+    camera_fb_t * fb = esp_camera_fb_get();
+
+    if (fb)
+      esp_camera_fb_return(fb);
+
+    delay(50);
+  }
+
   camera_fb_t * fb = esp_camera_fb_get();
   
   if(!fb){
