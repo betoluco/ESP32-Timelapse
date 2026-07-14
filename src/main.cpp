@@ -30,6 +30,7 @@
  
 // ---- Camera init config ----
 #define MAX_CAMERA_INIT_ATTEMPTS 3
+#define MAX_CAPTURE_ATTEMPTS 3
  
 // ---------------- LED ----------------
  
@@ -126,12 +127,38 @@ bool configInitCamera(){
  
   return true;
 }
+
+// A valid JPEG must start with SOI (0xFFD8) and end with EOI (0xFFD9),
+// and be a plausible size. Corrupted/incomplete frames from an SCCB
+// glitch or timing hiccup after light sleep usually fail this check.
+bool isValidJpeg(camera_fb_t * fb) {
+  if (!fb || fb->len < 1000) return false;
+
+  bool validStart = (fb->buf[0] == 0xFF && fb->buf[1] == 0xD8);
+  bool validEnd = (fb->buf[fb->len - 2] == 0xFF && fb->buf[fb->len - 1] == 0xD9);
+
+  return validStart && validEnd;
+}
  
 bool takePhoto(String path){
   camera_fb_t * fb = esp_camera_fb_get();
- 
-  if(!fb){
-    Serial.println("Camera capture failed");
+
+  for (int attempt = 1; attempt <= MAX_CAPTURE_ATTEMPTS; attempt++) {
+    if (fb) esp_camera_fb_return(fb);
+
+    fb = esp_camera_fb_get();
+
+    if (fb && isValidJpeg(fb)) {
+      break; // good frame, stop retrying
+    }
+
+    Serial.printf("Capture attempt %d produced a bad frame, retrying...\n", attempt);
+    delay(50);
+  }
+
+  if (!fb || !isValidJpeg(fb)) {
+    Serial.println("Camera capture failed after retries");
+    if (fb) esp_camera_fb_return(fb);
     blinkError(2);
     return false;
   }
@@ -204,9 +231,7 @@ void setup() {
     }
  
     enterLightSleep(CAPTURE_INTERVAL_SEC);
-    // Optional: uncomment if you see occasional failed captures
-    // right after wake, to let the camera clock stabilize.
-    // delay(20);
+    delay(20);
   }
 }
  
