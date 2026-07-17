@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include "esp_camera.h"
 #include "FS.h"
@@ -32,11 +31,31 @@
 #define MAX_CAMERA_INIT_ATTEMPTS 3
 #define MAX_CAPTURE_ATTEMPTS 3
  
+// If this many captures fail in a row, something is genuinely wrong
+// (most likely the sensor stuck in a bad state from a clock desync).
+// Recover via a real deep sleep: waking from deep sleep is a full reboot,
+// which resets the sensor and all peripherals instantly. The sleep
+// duration itself doesn't need to be long - it just needs to be nonzero
+// so the timer wakeup can trigger the reboot.
+#define MAX_CONSECUTIVE_FAILURES 5
+#define RECOVERY_SLEEP_SEC 5
+ 
+// ---------------- Logging ----------------
+ 
+// Simple timestamped log to SD for diagnosing intermittent failures
+// after the fact (millis() resets on every reboot/deep sleep, but the
+// relative gaps between entries are still useful for spotting patterns).
+void logEvent(String msg) {
+  File f = SD_MMC.open("/log.txt", FILE_APPEND);
+  if (!f) return;
+  f.printf("[%lu ms] %s\n", millis(), msg.c_str());
+  f.close();
+}
+ 
 // ---------------- LED ----------------
  
-void blinkError(int times, int delayMs = 200) {
+void blinkLed(int times, int delayMs = 200) {
   pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, HIGH); // start off (active-LOW LED)
  
   for (int i = 0; i < times; i++) {
     digitalWrite(STATUS_LED_PIN, LOW);  // on
@@ -97,7 +116,6 @@ bool configInitCamera(){
  
   if (err != ESP_OK) {
     Serial.printf("Camera init failed after %d attempts: 0x%x\n", MAX_CAMERA_INIT_ATTEMPTS, err);
-    blinkError(100);
     return false;
   }
  
@@ -111,11 +129,11 @@ bool configInitCamera(){
   s->set_wb_mode(s, 0);
   s->set_exposure_ctrl(s, 1);
   s->set_aec2(s, 1);          // advanced AEC, better in varying light
-  s->set_ae_level(s, 1);      // push exposure slightly brighter
+  s->set_ae_level(s, 0);      // neutral exposure target, not biased bright
   s->set_aec_value(s, 300);
   s->set_gain_ctrl(s, 1);
   s->set_agc_gain(s, 0);
-  s->set_gainceiling(s, (gainceiling_t)2); // allow more gain in low light
+  s->set_gainceiling(s, (gainceiling_t)2); // moderate ceiling, not max
   s->set_bpc(s, 0);
   s->set_wpc(s, 1);
   s->set_raw_gma(s, 1);
@@ -127,46 +145,43 @@ bool configInitCamera(){
  
   return true;
 }
-
+ 
 // A valid JPEG must start with SOI (0xFFD8) and end with EOI (0xFFD9),
 // and be a plausible size. Corrupted/incomplete frames from an SCCB
 // glitch or timing hiccup after light sleep usually fail this check.
 bool isValidJpeg(camera_fb_t * fb) {
   if (!fb || fb->len < 1000) return false;
-
+ 
   bool validStart = (fb->buf[0] == 0xFF && fb->buf[1] == 0xD8);
   bool validEnd = (fb->buf[fb->len - 2] == 0xFF && fb->buf[fb->len - 1] == 0xD9);
-
+ 
   return validStart && validEnd;
 }
  
 bool takePhoto(String path){
-  camera_fb_t * fb = esp_camera_fb_get();
-
+  camera_fb_t * fb = nullptr;
+ 
   for (int attempt = 1; attempt <= MAX_CAPTURE_ATTEMPTS; attempt++) {
     if (fb) esp_camera_fb_return(fb);
-
+ 
     fb = esp_camera_fb_get();
-
-    if (fb && isValidJpeg(fb)) {
+ 
+    if (isValidJpeg(fb)) {
       break; // good frame, stop retrying
     }
-
+ 
     Serial.printf("Capture attempt %d produced a bad frame, retrying...\n", attempt);
     delay(50);
   }
-
-  if (!fb || !isValidJpeg(fb)) {
-    Serial.println("Camera capture failed after retries");
+ 
+  if (!isValidJpeg(fb)) {
     if (fb) esp_camera_fb_return(fb);
-    blinkError(2);
     return false;
   }
  
   File file = SD_MMC.open(path.c_str(), FILE_WRITE);
  
   if (!file) {
-    Serial.println("Failed to create file");
     esp_camera_fb_return(fb);
     return false;
   }
@@ -200,6 +215,13 @@ void saveCounter(uint32_t count){
 // ---------------- Sleep ----------------
  
 void enterLightSleep(uint64_t sleepSeconds) {
+  // Keep these domains powered through light sleep. The camera's XCLK
+  // is generated via LEDC, which depends on the APB clock; letting these
+  // domains power down mid-sleep can interrupt XCLK and desync the
+  // sensor on wake, which shows up as gray/corrupted frames.
+  esp_sleep_pd_config(ESP_PD_DOMAIN_XTAL, ESP_PD_OPTION_ON);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+ 
   esp_sleep_enable_timer_wakeup(sleepSeconds * 1000000ULL);
   esp_light_sleep_start();
   // Execution resumes here on wake - camera, SD_MMC, and sensor
@@ -212,26 +234,42 @@ void setup() {
   Serial.begin(115200);
  
   if(!SD_MMC.begin()){ // default 4-bit mode
-    Serial.println("SD Card Mount Failed");
-    blinkError(100);
+    blinkLed(100);
     return;
   }
  
   if (!configInitCamera()) {
-    return; // init failure already blinked and logged
+    return; // init failure, program stops here
   }
  
+  blinkLed(3, 1000); // signal successful startup
+ 
   uint32_t count = loadCounter();
+  uint32_t consecutiveFailures = 0;
+ 
+  logEvent("Boot / camera init OK");
  
   while (true) {
     String path = "/picture_" + String(count) + ".jpg";
+ 
     if (takePhoto(path)) {
       saveCounter(++count);
       Serial.println(path);
+      consecutiveFailures = 0;
+    } else {
+      consecutiveFailures++;
+      logEvent("Capture failure #" + String(consecutiveFailures));
+ 
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        logEvent("Too many consecutive failures, entering recovery deep sleep");
+        esp_sleep_enable_timer_wakeup(RECOVERY_SLEEP_SEC * 1000000ULL);
+        esp_deep_sleep_start();
+        // Device fully reboots after this; setup() re-initializes everything clean.
+      }
     }
  
     enterLightSleep(CAPTURE_INTERVAL_SEC);
-    delay(20);
+    delay(20); // let camera clock/SCCB stabilize after wake before next capture
   }
 }
  
