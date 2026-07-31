@@ -31,14 +31,17 @@
 #define MAX_CAMERA_INIT_ATTEMPTS 3
 #define MAX_CAPTURE_ATTEMPTS 3
  
-// If this many captures fail in a row, something is genuinely wrong
-// (most likely the sensor stuck in a bad state from a clock desync).
+// If takePhoto() exhausts its retries, the sensor is likely stuck.
 // Recover via a real deep sleep: waking from deep sleep is a full reboot,
 // which resets the sensor and all peripherals instantly. The sleep
 // duration itself doesn't need to be long - it just needs to be nonzero
 // so the timer wakeup can trigger the reboot.
-#define MAX_CONSECUTIVE_FAILURES 5
 #define RECOVERY_SLEEP_SEC 5
+
+// Frames discarded before the one we save. AEC/AGC are auto and adjust
+// gradually frame to frame, so after any lighting change (or waking
+// from sleep) the first frame may still be mid-convergence.
+#define WARMUP_FRAMES 5
  
 // ---------------- Logging ----------------
  
@@ -114,11 +117,6 @@ bool configInitCamera(){
     delay(200);
   }
  
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed after %d attempts: 0x%x\n", MAX_CAMERA_INIT_ATTEMPTS, err);
-    return false;
-  }
- 
   sensor_t * s = esp_camera_sensor_get();
   s->set_brightness(s, 0);
   s->set_contrast(s, 0);
@@ -132,7 +130,6 @@ bool configInitCamera(){
   s->set_ae_level(s, 0);      // neutral exposure target, not biased bright
   s->set_aec_value(s, 300);
   s->set_gain_ctrl(s, 1);
-  s->set_agc_gain(s, 0);
   s->set_gainceiling(s, (gainceiling_t)2); // moderate ceiling, not max
   s->set_bpc(s, 0);
   s->set_wpc(s, 1);
@@ -159,6 +156,12 @@ bool isValidJpeg(camera_fb_t * fb) {
 }
  
 bool takePhoto(String path){
+  // Discard a few frames first so auto exposure/gain can converge to
+  // current lighting before the frame we actually keep.
+  for (int i = 0; i < WARMUP_FRAMES; i++) {
+    camera_fb_t * warmupFb = esp_camera_fb_get();
+    if (warmupFb) esp_camera_fb_return(warmupFb);
+  }
   camera_fb_t * fb = nullptr;
  
   for (int attempt = 1; attempt <= MAX_CAPTURE_ATTEMPTS; attempt++) {
@@ -255,23 +258,18 @@ void setup() {
     if (takePhoto(path)) {
       saveCounter(++count);
       Serial.println(path);
-      consecutiveFailures = 0;
     } else {
-      consecutiveFailures++;
       logEvent("Capture failure #" + String(consecutiveFailures));
- 
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        logEvent("Too many consecutive failures, entering recovery deep sleep");
-        esp_sleep_enable_timer_wakeup(RECOVERY_SLEEP_SEC * 1000000ULL);
-        esp_deep_sleep_start();
-        // Device fully reboots after this; setup() re-initializes everything clean.
-      }
+      esp_camera_deinit();
+      delay(100);
+      configInitCamera();
     }
- 
-    enterLightSleep(CAPTURE_INTERVAL_SEC);
-    delay(20); // let camera clock/SCCB stabilize after wake before next capture
   }
+ 
+  enterLightSleep(CAPTURE_INTERVAL_SEC);
+  delay(50); // let camera clock/SCCB stabilize after wake before next capture
 }
+
  
 void loop() {
   // unused - all logic lives in setup()'s while(true) loop
