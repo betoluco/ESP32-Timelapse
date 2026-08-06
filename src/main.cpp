@@ -31,12 +31,6 @@
 #define MAX_CAMERA_INIT_ATTEMPTS 3
 #define MAX_CAPTURE_ATTEMPTS 3
  
-// If takePhoto() exhausts its retries, the sensor is likely stuck.
-// Recover via a real deep sleep: waking from deep sleep is a full reboot,
-// which resets the sensor and all peripherals instantly. The sleep
-// duration itself doesn't need to be long - it just needs to be nonzero
-// so the timer wakeup can trigger the reboot.
-#define RECOVERY_SLEEP_SEC 5
 
 // Frames discarded before the one we save. AEC/AGC are auto and adjust
 // gradually frame to frame, so after any lighting change (or waking
@@ -248,7 +242,6 @@ void setup() {
   blinkLed(3, 1000); // signal successful startup
  
   uint32_t count = loadCounter();
-  uint32_t consecutiveFailures = 0;
  
   logEvent("Boot / camera init OK");
  
@@ -259,15 +252,18 @@ void setup() {
       saveCounter(++count);
       Serial.println(path);
     } else {
-      logEvent("Capture failure #" + String(consecutiveFailures));
+      logEvent("Capture failure");
       esp_camera_deinit();
       delay(100);
-      configInitCamera();
+      if (!configInitCamera()) {
+        logEvent("Camera re-init failed");
+      }
     }
+
+    enterLightSleep(CAPTURE_INTERVAL_SEC);
+    delay(50); // let camera clock/SCCB stabilize after wake before next capture
   }
  
-  enterLightSleep(CAPTURE_INTERVAL_SEC);
-  delay(50); // let camera clock/SCCB stabilize after wake before next capture
 }
 
  
