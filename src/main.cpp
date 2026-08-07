@@ -36,6 +36,14 @@
 // gradually frame to frame, so after any lighting change (or waking
 // from sleep) the first frame may still be mid-convergence.
 #define WARMUP_FRAMES 5
+
+// If a capture fails, recover with a real power cycle rather than just
+// re-initializing the camera in software - this resets everything
+// (camera, SD card, all peripherals), not just the camera, which
+// matters for cold-related glitches outdoors that could affect either.
+#define RECOVERY_SLEEP_SEC 5
+ 
+
  
 // ---------------- Logging ----------------
  
@@ -252,12 +260,11 @@ void setup() {
       saveCounter(++count);
       Serial.println(path);
     } else {
-      logEvent("Capture failure");
-      esp_camera_deinit();
-      delay(100);
-      if (!configInitCamera()) {
-        logEvent("Camera re-init failed");
-      }
+      logEvent("Capture failed after retries, power-cycling to recover");
+      esp_sleep_enable_timer_wakeup(RECOVERY_SLEEP_SEC * 1000000ULL);
+      esp_deep_sleep_start();
+      // Device fully reboots after this; setup() re-initializes
+      // everything clean, including the SD card, not just the camera.
     }
 
     enterLightSleep(CAPTURE_INTERVAL_SEC);
