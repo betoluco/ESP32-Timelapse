@@ -97,7 +97,7 @@ bool configInitCamera(){
  
   config.frame_size = FRAMESIZE_UXGA;
   config.jpeg_quality = 4;
-  config.fb_count = 1;
+  config.fb_count = 2;
  
   if (psramFound()) {
     config.fb_location = CAMERA_FB_IN_PSRAM;
