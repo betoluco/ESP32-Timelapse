@@ -132,7 +132,9 @@ bool configInitCamera(){
   s->set_ae_level(s, 0);      // neutral exposure target, not biased bright
   s->set_aec_value(s, 300);
   s->set_gain_ctrl(s, 1);
-  s->set_gainceiling(s, (gainceiling_t)2); // moderate ceiling, not max
+  s->set_gainceiling(s, (gainceiling_t)3); // raised from 2: lets AGC do more work
+                                            // so AEC needs less exposure time at
+                                            // night, keeping frames faster
   s->set_bpc(s, 0);
   s->set_wpc(s, 1);
   s->set_raw_gma(s, 1);
