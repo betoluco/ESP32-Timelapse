@@ -56,6 +56,26 @@ void logEvent(String msg) {
   f.printf("[%lu ms] %s\n", millis(), msg.c_str());
   f.close();
 }
+
+// Translates the chip's reset reason into a readable string. This tells
+// us WHY the last reboot happened: our own intentional deep sleep,
+// a brownout (voltage sag), a watchdog timeout (something hung), a
+// crash/panic, or a plain power-on - each points to a different cause.
+String resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:   return "POWERON (power applied / manual reset)";
+    case ESP_RST_EXT:       return "EXT (external reset pin)";
+    case ESP_RST_SW:        return "SW (software reset, e.g. esp_restart)";
+    case ESP_RST_PANIC:     return "PANIC (crash/exception)";
+    case ESP_RST_INT_WDT:   return "INT_WDT (interrupt watchdog - something hung)";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT (task watchdog - something hung)";
+    case ESP_RST_WDT:       return "WDT (other watchdog)";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP (woke from our own deep sleep)";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT (voltage sagged below safe threshold)";
+    case ESP_RST_SDIO:      return "SDIO (reset over SDIO)";
+    default:                return "UNKNOWN (" + String((int)reason) + ")";
+  }
+}
  
 // ---------------- LED ----------------
  
@@ -171,7 +191,13 @@ bool takePhoto(String path){
   for (int attempt = 1; attempt <= MAX_CAPTURE_ATTEMPTS; attempt++) {
     if (fb) esp_camera_fb_return(fb);
  
+    uint32_t captureStart = millis();
     fb = esp_camera_fb_get();
+    uint32_t captureMs = millis() - captureStart;
+ 
+    bool valid = isValidJpeg(fb);
+    logEvent(path + ": attempt " + String(attempt) + " took " +
+             String(captureMs) + " ms, valid=" + String(valid ? "yes" : "no"));
  
     if (isValidJpeg(fb)) {
       break; // good frame, stop retrying
@@ -244,6 +270,8 @@ void setup() {
     blinkLed(100);
     return;
   }
+
+  logEvent("Boot, reset reason: " + resetReasonToString(esp_reset_reason()));
  
   if (!configInitCamera()) {
     return; // init failure, program stops here
