@@ -114,7 +114,7 @@ bool configInitCamera(){
       break; // success, stop retrying
     }
  
-    Serial.printf("Camera init attempt %d failed: 0x%x\n", attempt, err);
+    logEvent("Camera init attempt " + String(attempt) + " failed: 0x" + String(err, HEX) + "\n");
     esp_camera_deinit();
     delay(200);
   }
@@ -175,11 +175,14 @@ bool takePhoto(String path){
       break; // good frame, stop retrying
     }
  
-    Serial.printf("Capture attempt %d produced a bad frame, retrying...\n", attempt);
+    logEvent(path + ": attempt " + String(attempt) + " produced a bad frame, retrying...\n");
     delay(50);
   }
  
   if (!isValidJpeg(fb)) {
+    logEvent("Picture " + path +
+             ": FAILED - no valid JPEG (last frame size=" +
+             String(fb ? fb->len : 0) + " bytes)");
     if (fb) esp_camera_fb_return(fb);
     return false;
   }
@@ -243,7 +246,7 @@ void setup() {
     return;
   }
 
-  logEvent("Boot, reset reason: " + esp_reset_reason());
+  logEvent("Boot, reset reason: " + String((int)esp_rom_get_reset_reason(0)));
  
   if (!configInitCamera()) {
     return; // init failure, program stops here
