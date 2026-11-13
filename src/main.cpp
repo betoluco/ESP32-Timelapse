@@ -26,6 +26,14 @@
  
 // ---- Capture cycle config ----
 #define CAPTURE_INTERVAL_SEC 3
+
+// Pictures go into numbered subfolders (/0000, /0001, ...) instead of the
+// card's root. FAT limits how many entries one directory can hold (about
+// 65,536, and a long filename uses several entries each), so a single
+// folder with every picture eventually refuses new files even when the
+// card is mostly empty.
+#define PICTURES_PER_FOLDER 1000
+#define MAX_FOLDER_CREATE_ATTEMPTS 3
  
 // ---- Camera init config ----
 #define MAX_CAMERA_INIT_ATTEMPTS 3
@@ -129,9 +137,13 @@ bool configInitCamera(){
   s->set_wb_mode(s, 0);
   s->set_exposure_ctrl(s, 1);
   s->set_aec2(s, 1);          // advanced AEC, better in varying light
-  s->set_ae_level(s, 0);      // neutral exposure target, not biased bright
+  s->set_ae_level(s, 1);      // raised from 0: new location is dimmer, biasing
+                              // target brighter. gainceiling stays low, so
+                              // this mostly extends exposure time, not gain -
+                              // safe now that we know exposure length wasn't
+                              // the actual cause of the earlier failures.
   s->set_aec_value(s, 300);
-  s->set_gain_ctrl(s, 1);
+  s->set_gain_ctrl(s, 1); 
   s->set_gainceiling(s, (gainceiling_t)1);
   s->set_bpc(s, 0);
   s->set_wpc(s, 1);
@@ -218,6 +230,32 @@ void saveCounter(uint32_t count){
   f.seek(0);
   f.print(count);
   f.close();
+}
+
+// ----------------Storage layout ------------
+
+// Returns the full path for a picture number, e.g. picture  3456 ->
+// "/0002/picture_3456.jpg", creating the forlder first if ir doesn't exist.
+
+String preparePicturePath(uint32_t pictureNumber) {
+  char folder[8];
+  snprintf(folder, sizeof(folder), "/%04u", (unsigned)(pictureNumber/PICTURES_PER_FOLDER));
+
+  bool folderReady = false;
+  for (int attempt = 1; attempt <= MAX_FOLDER_CREATE_ATTEMPTS; attempt++){
+    if (SD_MMC.exists(folder) || SD_MMC.mkdir(folder)) {
+      folderReady = true;
+      break;
+    }
+    delay(100);
+  }
+
+   if (!folderReady) {
+    logEvent("Picture #" + String(pictureNumber) + ": could not create folder " + String(folder));
+  }
+
+  return String(folder) + "/picture_" + String(pictureNumber) + ".jpg";
+
 }
  
 // ---------------- Sleep ----------------
