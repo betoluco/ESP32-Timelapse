@@ -81,7 +81,7 @@ void blinkLed(int times, int delayMs = 200) {
 // ---------------- Camera ----------------
  
 bool configInitCamera(){
-  camera_config_t config;
+  camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM;
