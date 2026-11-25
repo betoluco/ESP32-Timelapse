@@ -238,7 +238,7 @@ void saveCounter(uint32_t count){
 // "/0002/picture_3456.jpg", creating the forlder first if ir doesn't exist.
 
 String preparePicturePath(uint32_t pictureNumber) {
-  char folder[8];
+  char folder[12];
   snprintf(folder, sizeof(folder), "/%04u", (unsigned)(pictureNumber/PICTURES_PER_FOLDER));
 
   bool folderReady = false;
@@ -297,7 +297,7 @@ void setup() {
   logEvent("Boot / camera init OK");
  
   while (true) {
-    String path = "/picture_" + String(count) + ".jpg";
+    String path = preparePicturePath(count);
  
     if (takePhoto(path)) {
       saveCounter(++count);
